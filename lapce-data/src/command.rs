@@ -322,6 +322,10 @@ pub enum LapceWorkbenchCommand {
     #[strum(message = "Connect to SSH Host")]
     ConnectSshHost,
 
+    #[strum(serialize = "connect_custom_host")]
+    #[strum(message = "Connect to Custom Host")]
+    ConnectCustomHost,
+
     #[strum(serialize = "connect_wsl")]
     #[strum(message = "Connect to WSL")]
     ConnectWsl,

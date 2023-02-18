@@ -167,19 +167,19 @@ impl Title {
             LapceWorkspaceType::Local => data
                 .config
                 .get_color_unchecked(LapceTheme::LAPCE_REMOTE_LOCAL),
-            LapceWorkspaceType::RemoteSSH(_) | LapceWorkspaceType::RemoteWSL => {
-                match *data.proxy_status {
-                    ProxyStatus::Connecting => data
-                        .config
-                        .get_color_unchecked(LapceTheme::LAPCE_REMOTE_CONNECTING),
-                    ProxyStatus::Connected => data
-                        .config
-                        .get_color_unchecked(LapceTheme::LAPCE_REMOTE_CONNECTED),
-                    ProxyStatus::Disconnected => data
-                        .config
-                        .get_color_unchecked(LapceTheme::LAPCE_REMOTE_DISCONNECTED),
-                }
-            }
+            LapceWorkspaceType::RemoteSSH(_)
+            | LapceWorkspaceType::RemoteCustom(_)
+            | LapceWorkspaceType::RemoteWSL => match *data.proxy_status {
+                ProxyStatus::Connecting => data
+                    .config
+                    .get_color_unchecked(LapceTheme::LAPCE_REMOTE_CONNECTING),
+                ProxyStatus::Connected => data
+                    .config
+                    .get_color_unchecked(LapceTheme::LAPCE_REMOTE_CONNECTED),
+                ProxyStatus::Disconnected => data
+                    .config
+                    .get_color_unchecked(LapceTheme::LAPCE_REMOTE_DISCONNECTED),
+            },
         };
         self.rects.push((remote_rect, color.clone()));
         let remote_svg = data.config.ui_svg(LapceIcons::REMOTE);
@@ -200,14 +200,28 @@ impl Title {
         let command_rect =
             command_rect.with_size(Size::new(x - command_rect.x0, size.height));
 
-        let mut menu_items = vec![MenuKind::Item(MenuItem {
-            desc: None,
-            command: LapceCommand {
-                kind: CommandKind::Workbench(LapceWorkbenchCommand::ConnectSshHost),
-                data: None,
-            },
-            enabled: true,
-        })];
+        let mut menu_items = vec![
+            MenuKind::Item(MenuItem {
+                desc: None,
+                command: LapceCommand {
+                    kind: CommandKind::Workbench(
+                        LapceWorkbenchCommand::ConnectSshHost,
+                    ),
+                    data: None,
+                },
+                enabled: true,
+            }),
+            MenuKind::Item(MenuItem {
+                desc: None,
+                command: LapceCommand {
+                    kind: CommandKind::Workbench(
+                        LapceWorkbenchCommand::ConnectCustomHost,
+                    ),
+                    data: None,
+                },
+                enabled: true,
+            }),
+        ];
 
         #[cfg(target_os = "windows")]
         {
@@ -528,6 +542,9 @@ impl Title {
             LapceWorkspaceType::Local => "".to_string(),
             LapceWorkspaceType::RemoteSSH(ssh) => {
                 format!(" [SSH: {}]", ssh.host)
+            }
+            LapceWorkspaceType::RemoteCustom(custom) => {
+                format!(" [Custom: {custom}]")
             }
             LapceWorkspaceType::RemoteWSL => " [WSL]".to_string(),
         };

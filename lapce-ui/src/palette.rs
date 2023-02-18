@@ -602,6 +602,9 @@ impl ListPaint<PaletteListData> for PaletteItem {
                     LapceWorkspaceType::RemoteSSH(ssh) => {
                         format!("[{ssh}] {text}")
                     }
+                    LapceWorkspaceType::RemoteCustom(custom) => {
+                        format!("[{custom}] {text}")
+                    }
                     LapceWorkspaceType::RemoteWSL => {
                         format!("[wsl] {text}")
                     }
@@ -656,6 +659,12 @@ impl ListPaint<PaletteListData> for PaletteItem {
                 format!("{ssh}"),
                 self.indices.to_vec(),
             ),
+            PaletteItemContent::CustomHost(custom) => {
+                PaletteItemPaintInfo::new_text(
+                    format!("{custom}"),
+                    self.indices.to_vec(),
+                )
+            }
         };
 
         let line_height = data.line_height() as f64;
