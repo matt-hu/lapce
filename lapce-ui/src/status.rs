@@ -1,6 +1,6 @@
 use druid::{
     kurbo::Line,
-    piet::{PietTextLayout, Svg, Text, TextLayout, TextLayoutBuilder},
+    piet::{PietTextLayout, Svg, Text, TextLayout, TextLayoutBuilder, util::compute_blurred_rect},
     Command, Data, Event, EventCtx, MouseEvent, PaintCtx, Point, Rect,
     RenderContext, Size, Target, Widget,
 };
@@ -255,7 +255,37 @@ impl LapceStatus {
                 Target::Widget(data.id),
             ),
         ));
-
+        
+        // Encoding
+        // let encoding: String = String::from("Test2");
+        let encoding = String::from(data.main_split.content_doc(&editor.content).buffer().indent_string());
+        
+        let (point2, text_layout2, _) = self.paint_icon_with_label_from_right(
+            rect.x0 - 10.0,
+            size.height,
+            None,
+            encoding,
+            ctx,
+            &data.config,
+        );
+        
+        let rect2 = Rect::ZERO
+            .with_origin(Point::new(point2.x - 2.0, 0.0)) // expand hover effect slightly so it doesn't look weird
+            .with_size(Size::new(
+                text_layout2.layout.width() as f64 + 4.0,
+                size.height,
+            )); // since we start rectangle 2.0 earlier, we need to add to size to compensate, double that for same reason as above
+        
+        if rect2.contains(self.mouse_pos) {
+            ctx.fill(
+                rect2,
+                data.config
+                    .get_color_unchecked(LapceTheme::PANEL_CURRENT_BACKGROUND),
+            );
+        }
+        ctx.draw_text(&text_layout2, point2);
+        
+        
         // Document text/cursor details (line, column, character) / Go to line
 
         let mut string = "".to_string();
@@ -285,7 +315,7 @@ impl LapceStatus {
 
         if !string.is_empty() {
             let (point, text_layout, _) = self.paint_icon_with_label_from_right(
-                rect.x0 - 10.0, // give some space between document details and language name
+                rect2.x0 - 10.0, // give some space between document details and language name
                 size.height,
                 None,
                 string,

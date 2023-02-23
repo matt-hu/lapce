@@ -50,6 +50,17 @@ impl IndentStyle {
             }
         }
     }
+    
+    pub fn as_descriptor(&self) -> &'static str {
+        match *self {
+            IndentStyle::Tabs => "Tabs",
+            // IndentStyle::Spaces(x) => &format!("{} Spaces", x.to_string())[..],
+            // IndentStyle::Spaces(..) => "Spaces",
+            IndentStyle::Spaces(2) => "2 Spaces",
+            IndentStyle::Spaces(4) => "4 Spaces",
+            IndentStyle::Spaces(..) => "Spaces",
+        }
+    }
 }
 
 pub fn create_edit<'s>(

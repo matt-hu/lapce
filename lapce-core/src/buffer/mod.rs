@@ -294,6 +294,10 @@ impl Buffer {
     pub fn indent_unit(&self) -> &'static str {
         self.indent_style.as_str()
     }
+    
+    pub fn indent_string(&self) -> &'static str{
+        self.indent_style.as_descriptor()
+    }
 
     pub fn reset_edit_type(&mut self) {
         self.last_edit_type = EditType::Other;
