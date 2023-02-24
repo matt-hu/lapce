@@ -695,3 +695,8 @@ mode = "v"
 key = "shift+c"
 command = "delete_to_end_and_insert"
 mode = "n"
+
+[[keymaps]]
+key = "c i w"
+command = "delete_whole_word_and_insert"
+mode = "n"

@@ -1373,6 +1373,27 @@ impl Editor {
                 cursor.mode = CursorMode::Insert(selection);
                 vec![(delta, inval_lines, edits)]
             }
+            DeleteWholeWordAndInsert => {
+                let selection = {
+                    let mut new_selection = Selection::new();
+                    let selection = cursor.edit_selection(buffer);
+                    
+                    for region in selection.regions() {
+                        let end = buffer.move_word_forward(region.end);
+                        let start = buffer.move_word_backward(region.start, Mode::Normal);
+                        let new_region = SelRegion::new(start, end, None);
+                        new_selection.add_region(new_region);
+                    }
+
+                    new_selection
+                };
+                let (delta, inval_lines, edits) =
+                    buffer.edit(&[(&selection, "")], EditType::DeleteWord);
+                let selection =
+                    selection.apply_delta(&delta, true, InsertDrift::Default);
+                cursor.mode = CursorMode::Insert(selection);
+                vec![(delta, inval_lines, edits)]
+            }
             DeleteLineAndInsert => {
                 let selection = cursor.edit_selection(buffer);
                 let (start, end) = format_start_end(
