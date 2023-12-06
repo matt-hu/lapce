@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### Features/Changes
+- [#2723](https://github.com/lapce/lapce/pull/2723): Line wrapping based on width (no column-based yet)
+
+### Bug Fixes
+
+## 0.3.1
+
+### Features/Changes
+
+### Bug Fixes
+- [#2754](https://github.com/lapce/lapce/pull/2754): Don't mark nonexistent files as read only (fix saving new files)
+- [#2819](https://github.com/lapce/lapce/issues/2819): `Save Witohut Formatting` doesn't save the file
+
+## 0.3.0
+
+### Features/Changes
+- [#2190](https://github.com/lapce/lapce/pull/2190): Rewrite with Floem UI
+- [#2425](https://github.com/lapce/lapce/pull/2425): Reimplement completion lens
+- [#2498](https://github.com/lapce/lapce/pull/2498): Show Lapce as an option when doing "Open With..." on Linux
+- [#2549](https://github.com/lapce/lapce/pull/2549): Implement multi-line vim-motion yank and delete (`3dd`, `2yy`, etc.)
+- [#2553](https://github.com/lapce/lapce/pull/2553): Implement search and replace
+- [#1809](https://github.com/lapce/lapce/pull/1809): Implement debug adapter protocol
+
+### Bug Fixes
+
+- [#2650](https://github.com/lapce/lapce/pull/2650): Inform language servers that Lapce supports LSP diagnostics
+
+## 0.2.8
+
+### Features/Changes
+
+- [#1964](https://github.com/lapce/lapce/pull/1964): Add option to open files at line/column
+- [#2403](https://github.com/lapce/lapce/pull/2403): Add basic Vim marks feature
+
+### Bug Fixes
+
+## 0.2.7
+
+### Features/Changes
+
+### Bug Fixes
+- [#2209](https://github.com/lapce/lapce/pull/2209): Fix macOS crashes
+- [#2228](https://github.com/lapce/lapce/pull/2228): Fix `.desktop` entry to properly associate with Lapce on Wayland
+
+## 0.2.6
+
 ### Breaking changes
 
 - [#1820](https://github.com/lapce/lapce/pull/1820): Add remote svg icon colour to theme, disable plugin settings when none are available
@@ -27,6 +73,8 @@
 - [#2073](https://github.com/lapce/lapce/pull/2073): Add Ctrl+{a,e,k} keybinds on macOS
 - [#2128](https://github.com/lapce/lapce/pull/2128): Add Lapce app icon to logo collection
 - [#2127](https://github.com/lapce/lapce/pull/2127): Extended double-click options with file-only and file + folders mode
+- [#1944](https://github.com/lapce/lapce/pull/1944): Add filter input in git branch selection
+  - ![image](https://user-images.githubusercontent.com/4404609/211232461-293e3b31-4e17-457e-825c-3018699a6fc2.png)
 
 ### Bug Fixes
 - [#1911](https://github.com/lapce/lapce/pull/1911): Fix movement on selections with left/right arrow keys
@@ -37,6 +85,7 @@
 - [#2072](https://github.com/lapce/lapce/pull/2072): Fix connection issues from Windows to lapce proxy
 - [#2069](https://github.com/lapce/lapce/pull/2045): Fix not finding git repositories in parent path
 - [#2131](https://github.com/lapce/lapce/pull/2131): Fix overwriting symlink
+- [#2188](https://github.com/lapce/lapce/pull/2188): Fix auto closing matching pairs in inappropriate inputs
 
 ## 0.2.5
 

@@ -16,8 +16,12 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    file::FileNodeItem,
+    dap_types::{
+        self, DapId, RunDebugConfig, Scope, StackFrame, Stopped, ThreadId, Variable,
+    },
+    file::PathObject,
     plugin::{PluginId, VoltInfo, VoltMetadata},
+    proxy::ProxyStatus,
     source_control::DiffInfo,
     terminal::TermId,
     RequestId, RpcError, RpcMessage,
@@ -33,7 +37,9 @@ pub enum CoreRpc {
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "params")]
 pub enum CoreNotification {
-    ProxyConnected {},
+    ProxyStatus {
+        status: ProxyStatus,
+    },
     OpenFileChanged {
         path: PathBuf,
         content: String,
@@ -49,17 +55,10 @@ pub enum CoreNotification {
         resp: SignatureHelp,
         plugin_id: PluginId,
     },
-    ReloadBuffer {
-        path: PathBuf,
-        content: String,
-        rev: u64,
-    },
     OpenPaths {
-        window_tab_id: Option<(usize, usize)>,
-        folders: Vec<PathBuf>,
-        files: Vec<PathBuf>,
+        paths: Vec<PathObject>,
     },
-    WorkspaceFileChange {},
+    WorkspaceFileChange,
     PublishDiagnostics {
         diagnostics: PublishDiagnosticsParams,
     },
@@ -92,12 +91,6 @@ pub enum CoreNotification {
         volt: VoltInfo,
         only_installing: bool,
     },
-    ListDir {
-        items: Vec<FileNodeItem>,
-    },
-    DiffFiles {
-        files: Vec<PathBuf>,
-    },
     DiffInfo {
         diff: DiffInfo,
     },
@@ -105,12 +98,37 @@ pub enum CoreNotification {
         term_id: TermId,
         content: Vec<u8>,
     },
-    CloseTerminal {
+    TerminalLaunchFailed {
         term_id: TermId,
+        error: String,
+    },
+    TerminalProcessId {
+        term_id: TermId,
+        process_id: Option<u32>,
+    },
+    TerminalProcessStopped {
+        term_id: TermId,
+    },
+    RunInTerminal {
+        config: RunDebugConfig,
     },
     Log {
         level: String,
         message: String,
+    },
+    DapStopped {
+        dap_id: DapId,
+        stopped: Stopped,
+        stack_frames: HashMap<ThreadId, Vec<StackFrame>>,
+        variables: Vec<(Scope, Vec<Variable>)>,
+    },
+    DapContinued {
+        dap_id: DapId,
+    },
+    DapBreakpointsResp {
+        dap_id: DapId,
+        path: PathBuf,
+        breakpoints: Vec<dap_types::Breakpoint>,
     },
 }
 
@@ -207,12 +225,8 @@ impl CoreRpcHandler {
         let _ = self.tx.send(CoreRpc::Notification(Box::new(notification)));
     }
 
-    pub fn proxy_connected(&self) {
-        self.notification(CoreNotification::ProxyConnected {});
-    }
-
     pub fn workspace_file_change(&self) {
-        self.notification(CoreNotification::WorkspaceFileChange {});
+        self.notification(CoreNotification::WorkspaceFileChange);
     }
 
     pub fn diff_info(&self, diff: DiffInfo) {
@@ -270,7 +284,11 @@ impl CoreRpcHandler {
         });
     }
 
-    pub fn log(&self, level: log::Level, message: String) {
+    pub fn run_in_terminal(&self, config: RunDebugConfig) {
+        self.notification(CoreNotification::RunInTerminal { config });
+    }
+
+    pub fn log(&self, level: tracing::Level, message: String) {
         self.notification(CoreNotification::Log {
             level: level.as_str().to_string(),
             message,
@@ -293,12 +311,55 @@ impl CoreRpcHandler {
         self.notification(CoreNotification::LogMessage { message });
     }
 
-    pub fn close_terminal(&self, term_id: TermId) {
-        self.notification(CoreNotification::CloseTerminal { term_id });
+    pub fn terminal_process_id(&self, term_id: TermId, process_id: Option<u32>) {
+        self.notification(CoreNotification::TerminalProcessId {
+            term_id,
+            process_id,
+        });
+    }
+
+    pub fn terminal_process_stopped(&self, term_id: TermId) {
+        self.notification(CoreNotification::TerminalProcessStopped { term_id });
+    }
+
+    pub fn terminal_launch_failed(&self, term_id: TermId, error: String) {
+        self.notification(CoreNotification::TerminalLaunchFailed { term_id, error });
     }
 
     pub fn update_terminal(&self, term_id: TermId, content: Vec<u8>) {
         self.notification(CoreNotification::UpdateTerminal { term_id, content });
+    }
+
+    pub fn dap_stopped(
+        &self,
+        dap_id: DapId,
+        stopped: Stopped,
+        stack_frames: HashMap<ThreadId, Vec<StackFrame>>,
+        variables: Vec<(Scope, Vec<Variable>)>,
+    ) {
+        self.notification(CoreNotification::DapStopped {
+            dap_id,
+            stopped,
+            stack_frames,
+            variables,
+        });
+    }
+
+    pub fn dap_continued(&self, dap_id: DapId) {
+        self.notification(CoreNotification::DapContinued { dap_id });
+    }
+
+    pub fn dap_breakpoints_resp(
+        &self,
+        dap_id: DapId,
+        path: PathBuf,
+        breakpoints: Vec<dap_types::Breakpoint>,
+    ) {
+        self.notification(CoreNotification::DapBreakpointsResp {
+            dap_id,
+            path,
+            breakpoints,
+        });
     }
 
     pub fn home_dir(&self, path: PathBuf) {

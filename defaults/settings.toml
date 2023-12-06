@@ -7,24 +7,30 @@ icon-theme = "Lapce Codicons"
 custom-titlebar = true
 
 [editor]
-font-family = "Cascadia Code"
+font-family = "Monospace"
 font-size = 13
 code-lens-font-size = 2
 line-height = 1.5
+smart-tab = true
 tab-width = 4
 show-tab = true
 show-bread-crumbs = true
 scroll-beyond-last-line = true
 cursor-surrounding-lines = 1
+wrap-style = "editor-width"
+wrap-column = 80
+wrap-width = 600                        # px
 sticky-header = true
 completion-show-documentation = true
 show-signature = true
 signature-label-code-block = true
 auto-closing-matching-pairs = true
+auto-surround = true
 hover-delay = 300                       # ms
 modal-mode-relative-line-numbers = true
 format-on-save = false
 highlight-matching-brackets = true
+highlight-selection-occurrences = true
 highlight-scope-lines = false
 autosave-interval = 0
 format-on-autosave = true
@@ -35,6 +41,7 @@ enable-error-lens = true
 error-lens-end-of-line = true
 error-lens-font-family = ""
 error-lens-font-size = 0
+error-lens-multiline = false
 enable-completion-lens = false
 completion-lens-font-family = ""
 completion-lens-font-size = 0
@@ -53,13 +60,20 @@ scroll-speed-modifier=1
 font-family = ""
 font-size = 0
 line-height = 0
-shell = ""
+
+[terminal.default-profile]
+macos   = "default"
+linux   = "default"
+windows = "default"
+
+[terminal.profiles]
+default = {}
 
 [ui]
 font-family = ""
 font-size = 13
 icon-size = 0
-header-height = 35
+header-height = 36
 status-height = 25
 tab-min-width = 100
 scroll-width = 10
@@ -69,6 +83,7 @@ hover-font-family = ""
 hover-font-size = 0
 trim-search-results-whitespace = true
 list-line-height = 25
+tab-close-button = "Right"
 
 [color-theme]
 name = ""
@@ -121,7 +136,7 @@ magenta = "#C678DD"
 "lapce.warn" = "$yellow"
 "lapce.dropdown_shadow" = "#000000"
 "lapce.border" = "#000000"
-"lapce.scroll_bar" = "$grey"
+"lapce.scroll_bar" = "#3E4451BB"
 
 "lapce.button.primary.background" = "#50a14f"
 "lapce.button.primary.foreground" = "$black"
@@ -176,9 +191,9 @@ magenta = "#C678DD"
 
 "completion_lens.foreground" = "#5C6370"
 
-"source_control.added" = "#50A14F32"
-"source_control.removed" = "#FF526632"
-"source_control.modified" = "#0184BC32"
+"source_control.added" = "#50A14FCC"
+"source_control.removed" = "#FF5266CC"
+"source_control.modified" = "#0184BCCC"
 
 "palette.background" = "#21252B"
 "palette.foreground" = "$white"
@@ -193,6 +208,9 @@ magenta = "#C678DD"
 "activity.background" = "#21252B"
 "activity.current" = "$black"
 
+"debug.breakpoint" = "$red"
+"debug.breakpoint.hover" = "#E06C7566"
+
 "panel.background" = "#21252B"
 "panel.foreground" = "$white"
 "panel.foreground.dim" = "#5C6370"
@@ -200,6 +218,7 @@ magenta = "#C678DD"
 "panel.current.foreground" = "$white"
 "panel.current.foreground.dim" = "#5C6370"
 "panel.hovered.background" = "#343A45"
+"panel.hovered.active.background" = "#5C6370"
 "panel.hovered.foreground" = "$white"
 "panel.hovered.foreground.dim" = "#5C6370"
 
@@ -241,19 +260,37 @@ name = ""
 
 [icon-theme.ui]
 "logo" = "lapce_logo.svg"
+"menu" = "menu.svg"
 "link" = "link.svg"
 "error" = "error.svg"
 "add" = "add.svg"
 "close" = "close.svg"
-"remote" = "lapce_remote.svg"
+"remote" = "remote.svg"
 "unsaved" = "circle-filled.svg"
 "warning" = "warning.svg"
 "problem" = "problem.svg"
+"debug" = "debug.svg"
+"debug_breakpoint" = "circle-filled.svg"
+"debug_alt" = "debug-alt.svg"
+"debug_small" = "debug-alt-small.svg"
+"debug_restart" = "debug-restart.svg"
+"debug_continue" = "debug-continue.svg"
+"debug_step_over" = "debug-step-over.svg"
+"debug_step_into" = "debug-step-into.svg"
+"debug_step_out" = "debug-step-out.svg"
+"debug_pause" = "debug-pause.svg"
+"debug_stop" = "debug-stop.svg"
+"debug_console" = "debug-console.svg"
+"debug_disconnect" = "debug-disconnect.svg"
+"start" = "debug-start.svg"
+"run_errors" = "run-errors.svg"
 "settings" = "settings-gear.svg"
 "terminal" = "terminal.svg"
 "lightbulb" = "lightbulb.svg"
 "extensions" = "extensions.svg"
+"keyboard" = "keyboard.svg"
 "breadcrumb_separator" = "chevron-right.svg"
+"symbol_color" = "symbol-color.svg"
 
 "window.close" = "chrome-close.svg"
 "window.restore" = "chrome-restore.svg"
@@ -276,6 +313,10 @@ name = ""
 "scm.change.remove" = "remove.svg"
 
 "palette.menu" = "chevron-down.svg"
+
+"fold" = "fold.svg"
+"fold.up" = "fold-up.svg"
+"fold.down" = "fold-down.svg"
 
 "dropdown.arrow" = "chevron-down.svg"
 
@@ -309,6 +350,10 @@ name = ""
 "search.forward" = "arrow-down.svg"
 "search.backward" = "arrow-up.svg"
 "search.case_sensitive" = "case-sensitive.svg"
+"search.whole_word" = "whole-word.svg"
+"search.regex" = "regex.svg"
+"search.replace" = "replace.svg"
+"search.replace_all" = "replace-all.svg"
 
 "symbol_kind.array" = "symbol-array.svg"
 "symbol_kind.boolean" = "symbol-boolean.svg"

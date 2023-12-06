@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     path::PathBuf,
     sync::{
@@ -9,6 +10,7 @@ use std::{
 };
 
 use lapce_rpc::{
+    dap_types::{self, DapId, DapServer, SetBreakpointsResponse},
     plugin::{PluginId, VoltID, VoltMetadata},
     proxy::ProxyResponse,
     style::LineStyle,
@@ -24,16 +26,21 @@ use psp_types::Notification;
 use serde_json::Value;
 
 use super::{
+    dap::{DapClient, DapRpcHandler, DebuggerData},
     psp::{ClonableCallback, PluginServerRpc, PluginServerRpcHandler, RpcCallback},
     wasi::{load_all_volts, start_volt},
     PluginCatalogNotification, PluginCatalogRpcHandler,
 };
-use crate::plugin::{install_volt, wasi::enable_volt};
+use crate::plugin::{
+    install_volt, psp::PluginHandlerNotification, wasi::enable_volt,
+};
 
 pub struct PluginCatalog {
     workspace: Option<PathBuf>,
     plugin_rpc: PluginCatalogRpcHandler,
     plugins: HashMap<PluginId, PluginServerRpcHandler>,
+    daps: HashMap<DapId, DapRpcHandler>,
+    debuggers: HashMap<String, DebuggerData>,
     plugin_configurations: HashMap<String, HashMap<String, serde_json::Value>>,
     unactivated_volts: HashMap<VoltID, VoltMetadata>,
     open_files: HashMap<PathBuf, String>,
@@ -51,6 +58,8 @@ impl PluginCatalog {
             plugin_rpc: plugin_rpc.clone(),
             plugin_configurations,
             plugins: HashMap::new(),
+            daps: HashMap::new(),
+            debuggers: HashMap::new(),
             unactivated_volts: HashMap::new(),
             open_files: HashMap::new(),
         };
@@ -67,11 +76,12 @@ impl PluginCatalog {
         &mut self,
         plugin_id: Option<PluginId>,
         request_sent: Option<Arc<AtomicUsize>>,
-        method: &'static str,
+        method: Cow<'static, str>,
         params: Value,
         language_id: Option<String>,
         path: Option<PathBuf>,
-        f: Box<dyn ClonableCallback>,
+        check: bool,
+        f: Box<dyn ClonableCallback<Value, RpcError>>,
     ) {
         if let Some(plugin_id) = plugin_id {
             if let Some(plugin) = self.plugins.get(&plugin_id) {
@@ -80,7 +90,7 @@ impl PluginCatalog {
                     params,
                     language_id,
                     path,
-                    true,
+                    check,
                     move |result| {
                         f(plugin_id, result);
                     },
@@ -121,11 +131,11 @@ impl PluginCatalog {
             let f = dyn_clone::clone_box(&*f);
             let plugin_id = *plugin_id;
             plugin.server_request_async(
-                method,
+                method.clone(),
                 params.clone(),
                 language_id.clone(),
                 path.clone(),
-                true,
+                check,
                 move |result| {
                     f(plugin_id, result);
                 },
@@ -133,20 +143,33 @@ impl PluginCatalog {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn handle_server_notification(
         &mut self,
-        method: &'static str,
+        plugin_id: Option<PluginId>,
+        method: impl Into<Cow<'static, str>>,
         params: Value,
         language_id: Option<String>,
         path: Option<PathBuf>,
+        check: bool,
     ) {
+        if let Some(plugin_id) = plugin_id {
+            if let Some(plugin) = self.plugins.get(&plugin_id) {
+                plugin.server_notification(method, params, language_id, path, check);
+            }
+
+            return;
+        }
+
+        // Otherwise send it to all plugins
+        let method = method.into();
         for (_, plugin) in self.plugins.iter() {
             plugin.server_notification(
-                method,
+                method.clone(),
                 params.clone(),
                 language_id.clone(),
                 path.clone(),
-                true,
+                check,
             );
         }
     }
@@ -218,9 +241,8 @@ impl PluginCatalog {
     }
 
     pub fn handle_did_open_text_document(&mut self, document: TextDocumentItem) {
-        let language_id = document.language_id.clone();
         if let Ok(path) = document.uri.to_file_path() {
-            self.open_files.insert(path, language_id.clone());
+            self.open_files.insert(path, document.language_id.clone());
         }
 
         let to_be_activated: Vec<VoltID> = self
@@ -231,7 +253,7 @@ impl PluginCatalog {
                     .activation
                     .as_ref()
                     .and_then(|a| a.language.as_ref())
-                    .map(|l| l.contains(&language_id))?;
+                    .map(|l| l.contains(&document.language_id))?;
                 if contains {
                     Some(id.clone())
                 } else {
@@ -248,7 +270,7 @@ impl PluginCatalog {
                 DidOpenTextDocumentParams {
                     text_document: document.clone(),
                 },
-                Some(language_id.clone()),
+                Some(document.language_id.clone()),
                 path.clone(),
                 true,
             );
@@ -314,6 +336,100 @@ impl PluginCatalog {
         }
     }
 
+    pub fn dap_variable(
+        &self,
+        dap_id: DapId,
+        reference: usize,
+        f: Box<dyn RpcCallback<Vec<dap_types::Variable>, RpcError>>,
+    ) {
+        if let Some(dap) = self.daps.get(&dap_id) {
+            dap.variables_async(
+                reference,
+                |result: Result<dap_types::VariablesResponse, RpcError>| {
+                    f.call(result.map(|resp| resp.variables))
+                },
+            );
+        } else {
+            f.call(Err(RpcError {
+                code: 0,
+                message: "plugin doesn't exist".to_string(),
+            }));
+        }
+    }
+
+    pub fn dap_get_scopes(
+        &self,
+        dap_id: DapId,
+        frame_id: usize,
+        f: Box<
+            dyn RpcCallback<
+                Vec<(dap_types::Scope, Vec<dap_types::Variable>)>,
+                RpcError,
+            >,
+        >,
+    ) {
+        if let Some(dap) = self.daps.get(&dap_id) {
+            let local_dap = dap.clone();
+            dap.scopes_async(
+                frame_id,
+                move |result: Result<dap_types::ScopesResponse, RpcError>| {
+                    match result {
+                        Ok(resp) => {
+                            let scopes = resp.scopes.clone();
+                            if let Some(scope) = resp.scopes.get(0) {
+                                let scope = scope.to_owned();
+                                thread::spawn(move || {
+                                    local_dap.variables_async(
+                                        scope.variables_reference,
+                                        move |result: Result<
+                                            dap_types::VariablesResponse,
+                                            RpcError,
+                                        >| {
+                                            let resp: Vec<(
+                                                dap_types::Scope,
+                                                Vec<dap_types::Variable>,
+                                            )> = scopes
+                                                .iter()
+                                                .enumerate()
+                                                .map(|(index, s)| {
+                                                    (
+                                                        s.clone(),
+                                                        if index == 0 {
+                                                            result
+                                                                .as_ref()
+                                                                .map(|resp| {
+                                                                    resp.variables
+                                                                        .clone()
+                                                                })
+                                                                .unwrap_or_default()
+                                                        } else {
+                                                            Vec::new()
+                                                        },
+                                                    )
+                                                })
+                                                .collect();
+                                            f.call(Ok(resp));
+                                        },
+                                    );
+                                });
+                            } else {
+                                f.call(Ok(Vec::new()));
+                            }
+                        }
+                        Err(e) => {
+                            f.call(Err(e));
+                        }
+                    }
+                },
+            );
+        } else {
+            f.call(Err(RpcError {
+                code: 0,
+                message: "plugin doesn't exist".to_string(),
+            }));
+        }
+    }
+
     pub fn handle_notification(&mut self, notification: PluginCatalogNotification) {
         use PluginCatalogNotification::*;
         match notification {
@@ -346,7 +462,21 @@ impl PluginCatalog {
                         );
                     }
                 }
+
+                let plugin_id = plugin.plugin_id;
+                let spawned_by = plugin.spawned_by;
+
                 self.plugins.insert(plugin.plugin_id, plugin);
+
+                if let Some(spawned_by) = spawned_by {
+                    if let Some(plugin) = self.plugins.get(&spawned_by) {
+                        plugin.handle_rpc(PluginServerRpc::Handler(
+                            PluginHandlerNotification::SpawnedPluginLoaded {
+                                plugin_id,
+                            },
+                        ));
+                    }
+                }
             }
             InstallVolt(volt) => {
                 let workspace = self.workspace.clone();
@@ -391,6 +521,138 @@ impl PluginCatalog {
                 thread::spawn(move || {
                     let _ = enable_volt(plugin_rpc, volt);
                 });
+            }
+            DapLoaded(dap_rpc) => {
+                self.daps.insert(dap_rpc.dap_id, dap_rpc);
+            }
+            DapDisconnected(dap_id) => {
+                self.daps.remove(&dap_id);
+            }
+            DapStart {
+                config,
+                breakpoints,
+            } => {
+                let workspace = self.workspace.clone();
+                let plugin_rpc = self.plugin_rpc.clone();
+                if let Some(debugger) = config
+                    .ty
+                    .as_ref()
+                    .and_then(|ty| self.debuggers.get(ty).cloned())
+                {
+                    thread::spawn(move || {
+                        if let Ok(dap_rpc) = DapClient::start(
+                            DapServer {
+                                program: debugger.program,
+                                args: debugger.args.unwrap_or_default(),
+                                cwd: workspace,
+                            },
+                            config.clone(),
+                            breakpoints,
+                            plugin_rpc.clone(),
+                        ) {
+                            let _ = plugin_rpc.dap_loaded(dap_rpc.clone());
+
+                            let _ = dap_rpc.launch(&config);
+                        }
+                    });
+                }
+            }
+            DapProcessId {
+                dap_id,
+                process_id,
+                term_id,
+            } => {
+                if let Some(dap) = self.daps.get(&dap_id) {
+                    let _ = dap.termain_process_tx.send((term_id, process_id));
+                }
+            }
+            DapContinue { dap_id, thread_id } => {
+                if let Some(dap) = self.daps.get(&dap_id).cloned() {
+                    let plugin_rpc = self.plugin_rpc.clone();
+                    thread::spawn(move || {
+                        if dap.continue_thread(thread_id).is_ok() {
+                            plugin_rpc.core_rpc.dap_continued(dap_id);
+                        }
+                    });
+                }
+            }
+            DapPause { dap_id, thread_id } => {
+                if let Some(dap) = self.daps.get(&dap_id).cloned() {
+                    thread::spawn(move || {
+                        let _ = dap.pause_thread(thread_id);
+                    });
+                }
+            }
+            DapStepOver { dap_id, thread_id } => {
+                if let Some(dap) = self.daps.get(&dap_id).cloned() {
+                    dap.next(thread_id);
+                }
+            }
+            DapStepInto { dap_id, thread_id } => {
+                if let Some(dap) = self.daps.get(&dap_id).cloned() {
+                    dap.step_in(thread_id);
+                }
+            }
+            DapStepOut { dap_id, thread_id } => {
+                if let Some(dap) = self.daps.get(&dap_id).cloned() {
+                    dap.step_out(thread_id);
+                }
+            }
+            DapStop { dap_id } => {
+                if let Some(dap) = self.daps.get(&dap_id) {
+                    dap.stop();
+                }
+            }
+            DapDisconnect { dap_id } => {
+                if let Some(dap) = self.daps.get(&dap_id).cloned() {
+                    thread::spawn(move || {
+                        let _ = dap.disconnect();
+                    });
+                }
+            }
+            DapRestart {
+                dap_id,
+                breakpoints,
+            } => {
+                if let Some(dap) = self.daps.get(&dap_id) {
+                    dap.restart(breakpoints);
+                }
+            }
+            DapSetBreakpoints {
+                dap_id,
+                path,
+                breakpoints,
+            } => {
+                if let Some(dap) = self.daps.get(&dap_id) {
+                    let core_rpc = self.plugin_rpc.core_rpc.clone();
+                    dap.set_breakpoints_async(
+                        path.clone(),
+                        breakpoints,
+                        move |result: Result<SetBreakpointsResponse, RpcError>| {
+                            if let Ok(resp) = result {
+                                core_rpc.dap_breakpoints_resp(
+                                    dap_id,
+                                    path,
+                                    resp.breakpoints.unwrap_or_default(),
+                                );
+                            }
+                        },
+                    );
+                }
+            }
+            RegisterDebuggerType {
+                debugger_type,
+                program,
+                args,
+            } => {
+                self.debuggers.insert(
+                    debugger_type.clone(),
+                    DebuggerData {
+                        debugger_type,
+                        program,
+                        args,
+                    },
+                );
             }
             Shutdown => {
                 for (_, plugin) in self.plugins.iter() {

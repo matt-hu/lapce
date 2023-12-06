@@ -2,33 +2,52 @@ use std::fmt::Write;
 
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MotionMode {
-    Delete,
-    Yank,
+    Delete { count: usize },
+    Yank { count: usize },
     Indent,
     Outdent,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Copy, Deserialize, Serialize)]
+impl MotionMode {
+    pub fn count(&self) -> usize {
+        match self {
+            MotionMode::Delete { count } => *count,
+            MotionMode::Yank { count } => *count,
+            MotionMode::Indent => 1,
+            MotionMode::Outdent => 1,
+        }
+    }
+}
+
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    Copy,
+    Deserialize,
+    Serialize,
+    Default,
+    PartialOrd,
+    Ord,
+)]
 pub enum VisualMode {
+    #[default]
     Normal,
     Linewise,
     Blockwise,
-}
-
-impl Default for VisualMode {
-    fn default() -> Self {
-        VisualMode::Normal
-    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Copy, PartialOrd, Ord)]
 pub enum Mode {
     Normal,
     Insert,
-    Visual,
+    Visual(VisualMode),
     Terminal,
 }
 
@@ -46,7 +65,7 @@ impl From<Mode> for Modes {
         match mode {
             Mode::Normal => Self::NORMAL,
             Mode::Insert => Self::INSERT,
-            Mode::Visual => Self::VISUAL,
+            Mode::Visual(_) => Self::VISUAL,
             Mode::Terminal => Self::TERMINAL,
         }
     }
@@ -62,7 +81,7 @@ impl Modes {
                 'n' | 'N' => this.set(Self::NORMAL, true),
                 'v' | 'V' => this.set(Self::VISUAL, true),
                 't' | 'T' => this.set(Self::TERMINAL, true),
-                _ => log::warn!("Not an editor mode: {c}"),
+                _ => warn!("Not an editor mode: {c}"),
             }
         }
 

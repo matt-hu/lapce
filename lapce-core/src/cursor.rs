@@ -2,7 +2,7 @@ use lapce_xi_rope::{RopeDelta, Transformer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    buffer::Buffer,
+    buffer::{rope_text::RopeText, Buffer},
     mode::{Mode, MotionMode, VisualMode},
     register::RegisterData,
     selection::{InsertDrift, SelRegion, Selection},
@@ -22,6 +22,7 @@ pub struct Cursor {
     pub horiz: Option<ColPosition>,
     pub motion_mode: Option<MotionMode>,
     pub history_selections: Vec<Selection>,
+    pub affinity: CursorAffinity,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -35,12 +36,117 @@ pub enum CursorMode {
     Insert(Selection),
 }
 
+struct RegionsIter<'c> {
+    cursor_mode: &'c CursorMode,
+    idx: usize,
+}
+
+impl<'c> Iterator for RegionsIter<'c> {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.cursor_mode {
+            &CursorMode::Normal(offset) => (self.idx == 0).then(|| {
+                self.idx = 1;
+                (offset, offset)
+            }),
+            &CursorMode::Visual { start, end, .. } => (self.idx == 0).then(|| {
+                self.idx = 1;
+                (start, end)
+            }),
+            CursorMode::Insert(selection) => {
+                let next = selection
+                    .regions()
+                    .get(self.idx)
+                    .map(|&SelRegion { start, end, .. }| (start, end));
+
+                if next.is_some() {
+                    self.idx += 1;
+                }
+
+                next
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let total_len = match self.cursor_mode {
+            CursorMode::Normal(_) | CursorMode::Visual { .. } => 1,
+            CursorMode::Insert(selection) => selection.len(),
+        };
+        let len = total_len - self.idx;
+
+        (len, Some(len))
+    }
+}
+
+impl<'c> ExactSizeIterator for RegionsIter<'c> {}
+
 impl CursorMode {
     pub fn offset(&self) -> usize {
         match &self {
             CursorMode::Normal(offset) => *offset,
             CursorMode::Visual { end, .. } => *end,
             CursorMode::Insert(selection) => selection.get_cursor_offset(),
+        }
+    }
+
+    pub fn start_offset(&self) -> usize {
+        match &self {
+            CursorMode::Normal(offset) => *offset,
+            CursorMode::Visual { start, .. } => *start,
+            CursorMode::Insert(selection) => {
+                selection.first().map(|s| s.start).unwrap_or(0)
+            }
+        }
+    }
+
+    pub fn regions_iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (usize, usize)> + '_ {
+        RegionsIter {
+            cursor_mode: self,
+            idx: 0,
+        }
+    }
+}
+
+/// Decides how the cursor should be placed around special areas of text.  
+/// Ex:
+/// ```rust,ignore
+/// let j =            // soft linewrap
+/// 1 + 2 + 3;
+/// ```
+/// where `let j = ` has the issue that there's two positions you might want your cursor to be:  
+/// `let j = |` or `|1 + 2 + 3;`  
+/// These are the same offset in the text, but it feels more natural to have it move in a certain
+/// way.  
+/// If you're at `let j =| ` and you press the right-arrow key, then it uses your backwards
+/// affinity to keep you on the line at `let j = |`.  
+/// If you're at `1| + 2 + 3;` and you press the left-arrow key, then it uses your forwards affinity
+/// to keep you on the line at `|1 + 2 + 3;`.  
+///
+/// For other special text, like inlay hints, this can also apply.  
+/// ```rust,ignore
+/// let j<: String> = ...
+/// ```
+/// where `<: String>` is our inlay hint, then  
+/// `let |j<: String> =` and you press the right-arrow key, then it uses your backwards affinity to
+/// keep you on the same side of the hint, `let j|<: String>`.  
+/// `let j<: String> |=` and you press the right-arrow key, then it uses your forwards affinity to
+/// keep you on the same side of the hint, `let j<: String>| =`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CursorAffinity {
+    /// `<: String>|`
+    Forward,
+    /// `|<: String>`
+    Backward,
+}
+impl CursorAffinity {
+    pub fn invert(&self) -> Self {
+        match self {
+            CursorAffinity::Forward => CursorAffinity::Backward,
+            CursorAffinity::Backward => CursorAffinity::Forward,
         }
     }
 }
@@ -56,11 +162,35 @@ impl Cursor {
             horiz,
             motion_mode,
             history_selections: Vec::new(),
+            // It should appear before any inlay hints at the very first position
+            affinity: CursorAffinity::Backward,
         }
+    }
+
+    pub fn origin(modal: bool) -> Self {
+        Self::new(
+            if modal {
+                CursorMode::Normal(0)
+            } else {
+                CursorMode::Insert(Selection::caret(0))
+            },
+            None,
+            None,
+        )
     }
 
     pub fn offset(&self) -> usize {
         self.mode.offset()
+    }
+
+    pub fn start_offset(&self) -> usize {
+        self.mode.start_offset()
+    }
+
+    pub fn regions_iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (usize, usize)> + '_ {
+        self.mode.regions_iter()
     }
 
     pub fn is_normal(&self) -> bool {
@@ -78,7 +208,7 @@ impl Cursor {
     pub fn get_mode(&self) -> Mode {
         match &self.mode {
             CursorMode::Normal(_) => Mode::Normal,
-            CursorMode::Visual { .. } => Mode::Visual,
+            CursorMode::Visual { mode, .. } => Mode::Visual(*mode),
             CursorMode::Insert(_) => Mode::Insert,
         }
     }

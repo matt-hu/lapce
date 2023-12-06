@@ -12,7 +12,6 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
-use crossbeam_channel::Sender;
 use jsonrpc_lite::{Id, Params};
 use lapce_core::directory::Directory;
 use lapce_rpc::{
@@ -28,7 +27,6 @@ use lsp_types::{
 };
 use parking_lot::Mutex;
 use psp_types::{Notification, Request};
-use toml_edit::easy as toml;
 use wasi_experimental_http_wasmtime::{HttpCtx, HttpState};
 use wasmtime_wasi::WasiCtxBuilder;
 
@@ -36,7 +34,7 @@ use super::{
     client_capabilities,
     psp::{
         handle_plugin_server_message, PluginHandlerNotification, PluginHostHandler,
-        PluginServerHandler, PluginServerRpc, RpcCallback,
+        PluginServerHandler, PluginServerRpc, ResponseSender, RpcCallback,
     },
     volt_icon, PluginCatalogRpcHandler,
 };
@@ -90,7 +88,7 @@ pub struct Plugin {
 }
 
 impl PluginServerHandler for Plugin {
-    fn method_registered(&mut self, method: &'static str) -> bool {
+    fn method_registered(&mut self, method: &str) -> bool {
         self.host.method_registered(method)
     }
 
@@ -117,6 +115,9 @@ impl PluginServerHandler for Plugin {
             Shutdown => {
                 self.shutdown();
             }
+            SpawnedPluginLoaded { plugin_id } => {
+                self.host.handle_spawned_plugin_loaded(plugin_id);
+            }
         }
     }
 
@@ -129,9 +130,9 @@ impl PluginServerHandler for Plugin {
         id: Id,
         method: String,
         params: Params,
-        chan: Sender<Result<serde_json::Value, RpcError>>,
+        resp: ResponseSender,
     ) {
-        self.host.handle_request(id, method, params, chan);
+        self.host.handle_request(id, method, params, resp);
     }
 
     fn handle_did_save_text_document(
@@ -439,7 +440,7 @@ pub fn start_volt(
     let mut store = wasmtime::Store::new(&engine, wasi);
 
     let (io_tx, io_rx) = crossbeam_channel::unbounded();
-    let rpc = PluginServerRpcHandler::new(meta.id(), io_tx);
+    let rpc = PluginServerRpcHandler::new(meta.id(), None, None, io_tx);
 
     let local_rpc = rpc.clone();
     let local_stdin = stdin.clone();
@@ -464,7 +465,7 @@ pub fn start_volt(
             .get_func(&mut store, "handle_rpc")
             .ok_or_else(|| anyhow!("can't convet to function"))
             .unwrap()
-            .typed::<(), (), _>(&mut store)
+            .typed::<(), ()>(&mut store)
             .unwrap();
         for msg in io_rx {
             if let Ok(msg) = serde_json::to_string(&msg) {
@@ -503,6 +504,7 @@ pub fn start_volt(
                         }),
                 )
                 .collect(),
+            plugin_rpc.core_rpc.clone(),
             rpc.clone(),
             plugin_rpc.clone(),
         ),

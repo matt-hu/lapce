@@ -1,6 +1,7 @@
 #![allow(clippy::manual_clamp)]
 
 pub mod buffer;
+pub mod cli;
 pub mod dispatch;
 pub mod plugin;
 pub mod terminal;
@@ -9,6 +10,7 @@ pub mod watcher;
 use std::{
     io::{stdin, stdout, BufReader},
     path::PathBuf,
+    process::exit,
     sync::Arc,
     thread,
 };
@@ -19,31 +21,36 @@ use dispatch::Dispatcher;
 use lapce_core::{directory::Directory, meta};
 use lapce_rpc::{
     core::{CoreRpc, CoreRpcHandler},
+    file::PathObject,
     proxy::{ProxyMessage, ProxyNotification, ProxyRpcHandler},
     stdio::stdio_transport,
     RpcMessage,
 };
+use tracing::error;
 
 #[derive(Parser)]
-#[clap(name = "Lapce")]
-#[clap(version=*meta::VERSION)]
+#[clap(name = "Lapce-proxy")]
+#[clap(version = meta::VERSION)]
 struct Cli {
-    #[clap(short, long, action)]
+    #[clap(short, long, action, hide = true)]
     proxy: bool,
-    paths: Vec<PathBuf>,
+
+    /// Paths to file(s) and/or folder(s) to open.
+    /// When path is a file (that exists or not),
+    /// it accepts `path:line:column` syntax
+    /// to specify line and column at which it should open the file
+    #[clap(value_parser = cli::parse_file_line_column)]
+    #[clap(value_hint = clap::ValueHint::AnyPath)]
+    paths: Vec<PathObject>,
 }
 
 pub fn mainloop() {
     let cli = Cli::parse();
     if !cli.proxy {
-        let pwd = std::env::current_dir().unwrap_or_default();
-        let paths: Vec<_> = cli
-            .paths
-            .iter()
-            .map(|p| pwd.join(p).canonicalize().unwrap_or_default())
-            .collect();
-        let _ = try_open_in_existing_process(&paths);
-        return;
+        if let Err(e) = cli::try_open_in_existing_process(&cli.paths) {
+            error!("failed to open path(s): {e}");
+        };
+        exit(1);
     }
     let core_rpc = CoreRpcHandler::new();
     let proxy_rpc = ProxyRpcHandler::new();
@@ -128,19 +135,6 @@ pub fn register_lapce_path() -> Result<()> {
     Ok(())
 }
 
-fn try_open_in_existing_process(paths: &[PathBuf]) -> Result<()> {
-    let local_socket = Directory::local_socket()
-        .ok_or_else(|| anyhow!("can't get local socket folder"))?;
-    let mut socket =
-        interprocess::local_socket::LocalSocketStream::connect(local_socket)?;
-    let folders: Vec<_> = paths.iter().filter(|p| p.is_dir()).cloned().collect();
-    let files: Vec<_> = paths.iter().filter(|p| p.is_file()).cloned().collect();
-    let msg: ProxyMessage =
-        RpcMessage::Notification(ProxyNotification::OpenPaths { folders, files });
-    lapce_rpc::stdio::write_msg(&mut socket, msg)?;
-    Ok(())
-}
-
 fn listen_local_socket(proxy_rpc: ProxyRpcHandler) -> Result<()> {
     let local_socket = Directory::local_socket()
         .ok_or_else(|| anyhow!("can't get local socket folder"))?;
@@ -154,14 +148,10 @@ fn listen_local_socket(proxy_rpc: ProxyRpcHandler) -> Result<()> {
             loop {
                 let msg: ProxyMessage = lapce_rpc::stdio::read_msg(&mut reader)?;
                 if let RpcMessage::Notification(ProxyNotification::OpenPaths {
-                    folders,
-                    files,
+                    paths,
                 }) = msg
                 {
-                    proxy_rpc.notification(ProxyNotification::OpenPaths {
-                        folders,
-                        files,
-                    });
+                    proxy_rpc.notification(ProxyNotification::OpenPaths { paths });
                 }
             }
         });

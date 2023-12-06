@@ -7,7 +7,6 @@ use std::{
     },
 };
 
-use super::plugin::VoltID;
 use crossbeam_channel::{Receiver, Sender};
 use indexmap::IndexMap;
 use lapce_xi_rope::RopeDelta;
@@ -20,13 +19,15 @@ use lsp_types::{
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
+use super::plugin::VoltID;
 use crate::{
     buffer::BufferId,
-    file::FileNodeItem,
+    dap_types::{self, DapId, RunDebugConfig, SourceBreakpoint, ThreadId},
+    file::{FileNodeItem, PathObject},
     plugin::{PluginId, VoltInfo, VoltMetadata},
     source_control::FileDiff,
     style::SemanticStyles,
-    terminal::TermId,
+    terminal::{TermId, TerminalProfile},
     RequestId, RpcError, RpcMessage,
 };
 
@@ -35,6 +36,21 @@ pub enum ProxyRpc {
     Request(RequestId, ProxyRequest),
     Notification(ProxyNotification),
     Shutdown,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum ProxyStatus {
+    Connecting,
+    Connected,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchMatch {
+    pub line: usize,
+    pub start: usize,
+    pub end: usize,
+    pub line_content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +67,8 @@ pub enum ProxyRequest {
     GlobalSearch {
         pattern: String,
         case_sensitive: bool,
+        whole_word: bool,
+        is_regex: bool,
     },
     CompletionResolve {
         plugin_id: PluginId,
@@ -130,12 +148,16 @@ pub enum ProxyRequest {
     Save {
         rev: u64,
         path: PathBuf,
+        /// Whether to create the parent directories if they do not exist.
+        create_parents: bool,
     },
     SaveBufferAs {
         buffer_id: BufferId,
         path: PathBuf,
         rev: u64,
         content: String,
+        /// Whether to create the parent directories if they do not exist.
+        create_parents: bool,
     },
     CreateFile {
         path: PathBuf,
@@ -154,7 +176,16 @@ pub enum ProxyRequest {
         from: PathBuf,
         to: PathBuf,
     },
+    DapVariable {
+        dap_id: DapId,
+        reference: usize,
+    },
+    DapGetScopes {
+        dap_id: DapId,
+        frame_id: usize,
+    },
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "method", content = "params")]
@@ -170,8 +201,7 @@ pub enum ProxyNotification {
         path: PathBuf,
     },
     OpenPaths {
-        folders: Vec<PathBuf>,
-        files: Vec<PathBuf>,
+        paths: Vec<PathObject>,
     },
     Shutdown {},
     Completion {
@@ -195,8 +225,7 @@ pub enum ProxyNotification {
     },
     NewTerminal {
         term_id: TermId,
-        cwd: Option<PathBuf>,
-        shell: String,
+        profile: TerminalProfile,
     },
     InstallVolt {
         volt: VoltInfo,
@@ -218,7 +247,7 @@ pub enum ProxyNotification {
         diffs: Vec<FileDiff>,
     },
     GitCheckout {
-        branch: String,
+        reference: String,
     },
     GitDiscardFilesChanges {
         files: Vec<PathBuf>,
@@ -237,6 +266,50 @@ pub enum ProxyNotification {
     TerminalClose {
         term_id: TermId,
     },
+    DapStart {
+        config: RunDebugConfig,
+        breakpoints: HashMap<PathBuf, Vec<SourceBreakpoint>>,
+    },
+    DapProcessId {
+        dap_id: DapId,
+        process_id: Option<u32>,
+        term_id: TermId,
+    },
+    DapContinue {
+        dap_id: DapId,
+        thread_id: ThreadId,
+    },
+    DapStepOver {
+        dap_id: DapId,
+        thread_id: ThreadId,
+    },
+    DapStepInto {
+        dap_id: DapId,
+        thread_id: ThreadId,
+    },
+    DapStepOut {
+        dap_id: DapId,
+        thread_id: ThreadId,
+    },
+    DapPause {
+        dap_id: DapId,
+        thread_id: ThreadId,
+    },
+    DapStop {
+        dap_id: DapId,
+    },
+    DapDisconnect {
+        dap_id: DapId,
+    },
+    DapRestart {
+        dap_id: DapId,
+        breakpoints: HashMap<PathBuf, Vec<SourceBreakpoint>>,
+    },
+    DapSetBreakpoints {
+        dap_id: DapId,
+        path: PathBuf,
+        breakpoints: Vec<SourceBreakpoint>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,13 +321,14 @@ pub enum ProxyResponse {
     },
     NewBufferResponse {
         content: String,
+        read_only: bool,
     },
     BufferHeadResponse {
         version: String,
         content: String,
     },
     ReadDirResponse {
-        items: HashMap<PathBuf, FileNodeItem>,
+        items: Vec<FileNodeItem>,
     },
     CompletionResolveResponse {
         item: Box<CompletionItem>,
@@ -312,8 +386,13 @@ pub enum ProxyResponse {
         items: Vec<TextDocumentItem>,
     },
     GlobalSearchResponse {
-        #[allow(clippy::type_complexity)]
-        matches: IndexMap<PathBuf, Vec<(usize, (usize, usize), String)>>,
+        matches: IndexMap<PathBuf, Vec<SearchMatch>>,
+    },
+    DapVariableResponse {
+        varialbes: Vec<dap_types::Variable>,
+    },
+    DapGetScopesResponse {
+        scopes: Vec<(dap_types::Scope, Vec<dap_types::Variable>)>,
     },
     Success {},
     SaveResponse {},
@@ -444,8 +523,8 @@ impl ProxyRpcHandler {
         self.notification(ProxyNotification::GitCommit { message, diffs });
     }
 
-    pub fn git_checkout(&self, branch: String) {
-        self.notification(ProxyNotification::GitCheckout { branch });
+    pub fn git_checkout(&self, reference: String) {
+        self.notification(ProxyNotification::GitCheckout { reference });
     }
 
     pub fn install_volt(&self, volt: VoltInfo) {
@@ -518,17 +597,8 @@ impl ProxyRpcHandler {
         });
     }
 
-    pub fn new_terminal(
-        &self,
-        term_id: TermId,
-        cwd: Option<PathBuf>,
-        shell: String,
-    ) {
-        self.notification(ProxyNotification::NewTerminal {
-            term_id,
-            cwd,
-            shell,
-        })
+    pub fn new_terminal(&self, term_id: TermId, profile: TerminalProfile) {
+        self.notification(ProxyNotification::NewTerminal { term_id, profile })
     }
 
     pub fn terminal_close(&self, term_id: TermId) {
@@ -543,11 +613,8 @@ impl ProxyRpcHandler {
         });
     }
 
-    pub fn terminal_write(&self, term_id: TermId, content: &str) {
-        self.notification(ProxyNotification::TerminalWrite {
-            term_id,
-            content: content.to_string(),
-        });
+    pub fn terminal_write(&self, term_id: TermId, content: String) {
+        self.notification(ProxyNotification::TerminalWrite { term_id, content });
     }
 
     pub fn new_buffer(
@@ -559,12 +626,7 @@ impl ProxyRpcHandler {
         self.request_async(ProxyRequest::NewBuffer { buffer_id, path }, f);
     }
 
-    pub fn get_buffer_head(
-        &self,
-        _buffer_id: BufferId,
-        path: PathBuf,
-        f: impl ProxyCallback + 'static,
-    ) {
+    pub fn get_buffer_head(&self, path: PathBuf, f: impl ProxyCallback + 'static) {
         self.request_async(ProxyRequest::BufferHead { path }, f);
     }
 
@@ -610,6 +672,7 @@ impl ProxyRpcHandler {
         path: PathBuf,
         rev: u64,
         content: String,
+        create_parents: bool,
         f: impl ProxyCallback + 'static,
     ) {
         self.request_async(
@@ -618,6 +681,7 @@ impl ProxyRpcHandler {
                 path,
                 rev,
                 content,
+                create_parents,
             },
             f,
         );
@@ -627,19 +691,36 @@ impl ProxyRpcHandler {
         &self,
         pattern: String,
         case_sensitive: bool,
+        whole_word: bool,
+        is_regex: bool,
         f: impl ProxyCallback + 'static,
     ) {
         self.request_async(
             ProxyRequest::GlobalSearch {
                 pattern,
                 case_sensitive,
+                whole_word,
+                is_regex,
             },
             f,
         );
     }
 
-    pub fn save(&self, rev: u64, path: PathBuf, f: impl ProxyCallback + 'static) {
-        self.request_async(ProxyRequest::Save { rev, path }, f);
+    pub fn save(
+        &self,
+        rev: u64,
+        path: PathBuf,
+        create_parents: bool,
+        f: impl ProxyCallback + 'static,
+    ) {
+        self.request_async(
+            ProxyRequest::Save {
+                rev,
+                path,
+                create_parents,
+            },
+            f,
+        );
     }
 
     pub fn get_files(&self, f: impl ProxyCallback + 'static) {
@@ -862,6 +943,100 @@ impl ProxyRpcHandler {
         f: impl ProxyCallback + 'static,
     ) {
         self.request_async(ProxyRequest::GetSelectionRange { path, positions }, f);
+    }
+
+    pub fn dap_start(
+        &self,
+        config: RunDebugConfig,
+        breakpoints: HashMap<PathBuf, Vec<SourceBreakpoint>>,
+    ) {
+        self.notification(ProxyNotification::DapStart {
+            config,
+            breakpoints,
+        })
+    }
+
+    pub fn dap_process_id(
+        &self,
+        dap_id: DapId,
+        process_id: Option<u32>,
+        term_id: TermId,
+    ) {
+        self.notification(ProxyNotification::DapProcessId {
+            dap_id,
+            process_id,
+            term_id,
+        })
+    }
+
+    pub fn dap_restart(
+        &self,
+        dap_id: DapId,
+        breakpoints: HashMap<PathBuf, Vec<SourceBreakpoint>>,
+    ) {
+        self.notification(ProxyNotification::DapRestart {
+            dap_id,
+            breakpoints,
+        })
+    }
+
+    pub fn dap_continue(&self, dap_id: DapId, thread_id: ThreadId) {
+        self.notification(ProxyNotification::DapContinue { dap_id, thread_id })
+    }
+
+    pub fn dap_step_over(&self, dap_id: DapId, thread_id: ThreadId) {
+        self.notification(ProxyNotification::DapStepOver { dap_id, thread_id })
+    }
+
+    pub fn dap_step_into(&self, dap_id: DapId, thread_id: ThreadId) {
+        self.notification(ProxyNotification::DapStepInto { dap_id, thread_id })
+    }
+
+    pub fn dap_step_out(&self, dap_id: DapId, thread_id: ThreadId) {
+        self.notification(ProxyNotification::DapStepOut { dap_id, thread_id })
+    }
+
+    pub fn dap_pause(&self, dap_id: DapId, thread_id: ThreadId) {
+        self.notification(ProxyNotification::DapPause { dap_id, thread_id })
+    }
+
+    pub fn dap_stop(&self, dap_id: DapId) {
+        self.notification(ProxyNotification::DapStop { dap_id })
+    }
+
+    pub fn dap_disconnect(&self, dap_id: DapId) {
+        self.notification(ProxyNotification::DapDisconnect { dap_id })
+    }
+
+    pub fn dap_set_breakpoints(
+        &self,
+        dap_id: DapId,
+        path: PathBuf,
+        breakpoints: Vec<SourceBreakpoint>,
+    ) {
+        self.notification(ProxyNotification::DapSetBreakpoints {
+            dap_id,
+            path,
+            breakpoints,
+        })
+    }
+
+    pub fn dap_variable(
+        &self,
+        dap_id: DapId,
+        reference: usize,
+        f: impl ProxyCallback + 'static,
+    ) {
+        self.request_async(ProxyRequest::DapVariable { dap_id, reference }, f);
+    }
+
+    pub fn dap_get_scopes(
+        &self,
+        dap_id: DapId,
+        frame_id: usize,
+        f: impl ProxyCallback + 'static,
+    ) {
+        self.request_async(ProxyRequest::DapGetScopes { dap_id, frame_id }, f);
     }
 }
 
